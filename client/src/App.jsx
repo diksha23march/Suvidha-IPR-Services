@@ -1,7 +1,9 @@
-
+import { useState } from "react";
 import "./App.css";
+import EnquiryForm from "./EnquiryForm.jsx";
 
 function App() {
+  const [enquiryType, setEnquiryType] = useState(null);
   return (
     <div className="app">
       <header className="navbar">
@@ -133,7 +135,12 @@ function App() {
                 preparing documentation, and navigating the filing
                 process for eligible inventions.
               </p>
-              <a href="#contact">Enquire about patents <span>↗</span></a>
+              <a
+                href="#enquiry-form"
+                onClick={() => setEnquiryType("patent")}
+              >
+                Enquire about patents <span aria-hidden="true">↗</span>
+              </a>
             </article>
 
             <article className="service-card copyright-card">
@@ -148,7 +155,12 @@ function App() {
                 including written content, artwork, music, and
                 other creative expressions.
               </p>
-              <a href="#contact">Enquire about copyrights <span>↗</span></a>
+              <a
+                href="#enquiry-form"
+                onClick={() => setEnquiryType("copyright")}
+              >
+                Enquire about copyrights <span aria-hidden="true">↗</span>
+              </a>
             </article>
           </div>
           <p className="legal-note">
@@ -183,14 +195,34 @@ function App() {
               We can start by understanding your requirements.
             </p>
           </div>
-          <a className="button-primary" href="mailto:">
-            Make an Enquiry <span aria-hidden="true">↗</span>
-          </a>
+          <div className="contact-enquiry-actions">
+            <button
+              className="button-primary"
+              type="button"
+              onClick={() => setEnquiryType("patent")}
+            >
+              Patent Enquiry
+            </button>
+
+            <button
+              className="button-secondary"
+              type="button"
+              onClick={() => setEnquiryType("copyright")}
+            >
+              Copyright Enquiry
+            </button>
+          </div>
           <small>
             Contact details will be added once the business-approved
             email address and enquiry process are confirmed.
           </small>
         </section>
+        {enquiryType && (
+          <EnquiryForm
+            type={enquiryType}
+            onClose={() => setEnquiryType(null)}
+          />
+        )}
       </main>
 
       <footer className="footer">
