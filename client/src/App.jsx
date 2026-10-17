@@ -1,9 +1,15 @@
 import { useState } from "react";
 import "./App.css";
 import EnquiryForm from "./EnquiryForm.jsx";
+import AdminDashboard from "./AdminDashboard.jsx";
 
 function App() {
   const [enquiryType, setEnquiryType] = useState(null);
+
+  if (window.location.pathname === "/admin") {
+    return <AdminDashboard />;
+  }
+
   return (
     <div className="app">
       <header className="navbar">

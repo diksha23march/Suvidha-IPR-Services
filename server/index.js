@@ -3,6 +3,9 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -56,6 +59,133 @@ app.get("/api/db-health", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Database connection failed",
+    });
+  }
+});
+
+function authenticateAdmin(req, res, next) {
+  const authorization = req.headers.authorization;
+
+  if (!authorization || !authorization.startsWith("Bearer ")) {
+    return res.status(401).json({
+      success: false,
+      message: "Authentication required.",
+    });
+  }
+
+  if (!process.env.JWT_SECRET) {
+    console.error("JWT_SECRET is not configured.");
+    return res.status(500).json({
+      success: false,
+      message: "Authentication service is unavailable.",
+    });
+  }
+
+  const token = authorization.slice(7).trim();
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    if (!decoded.sub || !decoded.email) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid authentication token.",
+      });
+    }
+
+    req.admin = {
+      id: decoded.sub,
+      email: decoded.email,
+    };
+
+    next();
+  } catch {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired authentication token.",
+    });
+  }
+}
+
+app.post("/api/admin/login", async (req, res) => {
+  const email =
+    typeof req.body?.email === "string"
+      ? req.body.email.trim().toLowerCase()
+      : "";
+
+  const password =
+    typeof req.body?.password === "string"
+      ? req.body.password
+      : "";
+
+  if (!email || !password || password.length > 128) {
+    return res.status(400).json({
+      success: false,
+      message: "Please provide a valid email and password.",
+    });
+  }
+
+  if (!process.env.JWT_SECRET) {
+    console.error("JWT_SECRET is not configured.");
+    return res.status(500).json({
+      success: false,
+      message: "Authentication service is unavailable.",
+    });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, email, password_hash
+       FROM admin_users
+       WHERE email = $1`,
+      [email]
+    );
+
+    const admin = result.rows[0];
+
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password.",
+      });
+    }
+
+    const passwordMatches = await bcrypt.compare(
+      password,
+      admin.password_hash
+    );
+
+    if (!passwordMatches) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password.",
+      });
+    }
+
+    const token = jwt.sign(
+      { email: admin.email },
+      process.env.JWT_SECRET,
+      {
+        subject: String(admin.id),
+        expiresIn: "1h",
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Admin login successful.",
+      token,
+      admin: {
+        id: admin.id,
+        email: admin.email,
+      },
+    });
+  } catch (error) {
+    console.error("Admin login error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to log in right now.",
     });
   }
 });
@@ -281,6 +411,162 @@ app.post("/api/enquiries/copyright", async (req, res) => {
     });
   }
 });
+
+function validateEnquiryId(req, res) {
+  const id = req.params.id;
+
+  if (!/^[1-9]\d*$/.test(id)) {
+    res.status(400).json({
+      success: false,
+      message: "A valid enquiry ID is required.",
+    });
+    return null;
+  }
+
+  return id;
+}
+
+// List patent enquiries — admin only
+app.get("/api/admin/enquiries/patent", authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, applicant_name, email, phone, organization,
+              invention_title, invention_summary, public_disclosure,
+              status, created_at, updated_at
+       FROM patent_enquiries
+       ORDER BY created_at DESC
+       LIMIT 100`
+    );
+
+    res.json({ success: true, enquiries: result.rows });
+  } catch (error) {
+    console.error("Admin patent enquiry list error:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve patent enquiries.",
+    });
+  }
+});
+
+// List copyright enquiries — admin only
+app.get("/api/admin/enquiries/copyright", authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, applicant_name, email, phone, organization,
+              work_title, work_type, work_description,
+              status, created_at, updated_at
+       FROM copyright_enquiries
+       ORDER BY created_at DESC
+       LIMIT 100`
+    );
+
+    res.json({ success: true, enquiries: result.rows });
+  } catch (error) {
+    console.error("Admin copyright enquiry list error:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve copyright enquiries.",
+    });
+  }
+});
+
+// Update patent enquiry status — admin only
+app.patch(
+  "/api/admin/enquiries/patent/:id/status",
+  authenticateAdmin,
+  async (req, res) => {
+    const id = validateEnquiryId(req, res);
+    if (!id) return;
+
+    const { status } = req.body ?? {};
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid enquiry status.",
+        allowedStatuses,
+      });
+    }
+
+    try {
+      const result = await pool.query(
+        `UPDATE patent_enquiries
+         SET status = $1, updated_at = NOW()
+         WHERE id = $2
+         RETURNING id, status, updated_at`,
+        [status, id]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Patent enquiry not found.",
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Patent enquiry status updated.",
+        enquiry: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Patent status update error:", error.message);
+      res.status(500).json({
+        success: false,
+        message: "Unable to update patent enquiry status.",
+      });
+    }
+  }
+);
+
+// Update copyright enquiry status — admin only
+app.patch(
+  "/api/admin/enquiries/copyright/:id/status",
+  authenticateAdmin,
+  async (req, res) => {
+    const id = validateEnquiryId(req, res);
+    if (!id) return;
+
+    const { status } = req.body ?? {};
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid enquiry status.",
+        allowedStatuses,
+      });
+    }
+
+    try {
+      const result = await pool.query(
+        `UPDATE copyright_enquiries
+         SET status = $1, updated_at = NOW()
+         WHERE id = $2
+         RETURNING id, status, updated_at`,
+        [status, id]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Copyright enquiry not found.",
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Copyright enquiry status updated.",
+        enquiry: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Copyright status update error:", error.message);
+      res.status(500).json({
+        success: false,
+        message: "Unable to update copyright enquiry status.",
+      });
+    }
+  }
+);
 
 app.listen(PORT, () => {
   console.log(`Suvidha API running at http://localhost:${PORT}`);
